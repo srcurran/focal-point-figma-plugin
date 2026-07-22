@@ -1,0 +1,21 @@
+{
+  "name": "Focal Point",
+  "id": "1661755431369623402",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "capabilities": [],
+  "relaunchButtons": [
+    { "command": "edit", "name": "Edit focal point" }
+  ],
+  "enableProposedApi": false,
+  "documentAccess": "dynamic-page",
+  "editorType": [
+    "figma"
+  ],
+  "networkAccess": {
+    "allowedDomains": [
+      "none"
+    ]
+  }
+}

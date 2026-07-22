@@ -1,0 +1,266 @@
+<style>
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    padding: 12px;
+    font-family: Inter, -apple-system, system-ui, sans-serif;
+    font-size: 11px;
+    color: var(--figma-color-text, #333);
+    background: var(--figma-color-bg, #fff);
+  }
+  #previewArea {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100px;
+    background: var(--figma-color-bg-secondary, #f5f5f5);
+    border: 1px solid var(--figma-color-border, #e6e6e6);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  #previewWrap {
+    position: relative;
+    display: none;
+    cursor: crosshair;
+    touch-action: none;
+    /* Clips the marker's giant box-shadow (the dim cast) to the image. */
+    overflow: hidden;
+  }
+  #preview {
+    display: block;
+    max-width: 274px;
+    max-height: 274px;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+  /* Subtract-style selector: the circle punches through the semi-opaque
+     black cast (the giant outer box-shadow) with a slight lift inside. */
+  #marker {
+    position: absolute;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.05);
+    transform: translate(-50%, -50%);
+    box-shadow:
+      0 0 0 4px rgba(255, 255, 255, 0.8),
+      0 0 0 9999px rgba(0, 0, 0, 0.45);
+    pointer-events: none;
+  }
+  #previewEmpty {
+    color: var(--figma-color-text-secondary, #888);
+    padding: 24px;
+    text-align: center;
+  }
+  .check {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: 10px;
+  }
+  .check label {
+    color: var(--figma-color-text, #333);
+  }
+  #perf {
+    margin-top: 8px;
+    color: var(--figma-color-text-secondary, #888);
+    min-height: 14px;
+  }
+</style>
+
+<div id="root">
+  <div id="previewArea">
+    <div id="previewWrap">
+      <img id="preview" />
+      <div id="marker"></div>
+    </div>
+    <div id="previewEmpty">Select a layer with an image fill</div>
+  </div>
+
+  <div class="check">
+    <input id="auto" type="checkbox" checked />
+    <label for="auto">Re-apply automatically on resize</label>
+  </div>
+
+  <div id="perf"></div>
+</div>
+
+<script>
+  const previewWrap = document.getElementById('previewWrap');
+  const preview = document.getElementById('preview');
+  const previewEmpty = document.getElementById('previewEmpty');
+  const marker = document.getElementById('marker');
+  const auto = document.getElementById('auto');
+  const perf = document.getElementById('perf');
+
+  const PREVIEW_MAX = 600; // px, longer edge of the downscaled preview
+
+  let focal = { x: 0.5, y: 0.5 };
+  let currentHash = null;
+  let dragging = false;
+  const previewCache = new Map(); // imageHash -> object URL of downscaled preview
+
+  function send(msg) {
+    parent.postMessage({ pluginMessage: msg }, '*');
+  }
+
+  function clamp01(v) {
+    return Math.min(Math.max(v, 0), 1);
+  }
+
+  function syncMarker() {
+    marker.style.left = focal.x * 100 + '%';
+    marker.style.top = focal.y * 100 + '%';
+  }
+
+  // Ask the plugin to shrink-wrap the window around the content. Measures the
+  // content wrapper, not the body — the body always fills the iframe viewport,
+  // so its scrollHeight can never report a height smaller than the window.
+  const root = document.getElementById('root');
+  let lastFitHeight = 0;
+  function fitWindow() {
+    requestAnimationFrame(() => {
+      const h = Math.ceil(root.getBoundingClientRect().height) + 24;
+      if (Math.abs(h - lastFitHeight) < 2) return;
+      lastFitHeight = h;
+      send({ type: 'resize', height: h });
+    });
+  }
+
+  // Live-apply, throttled to one message per animation frame.
+  let applyQueued = false;
+  let lastSentKey = null;
+  function scheduleApply() {
+    if (applyQueued) return;
+    applyQueued = true;
+    requestAnimationFrame(() => {
+      applyQueued = false;
+      const key = focal.x.toFixed(4) + ',' + focal.y.toFixed(4);
+      if (key === lastSentKey) return;
+      lastSentKey = key;
+      send({ type: 'apply', x: focal.x * 100, y: focal.y * 100 });
+    });
+  }
+
+  // --- Click / drag on the preview ---------------------------------------
+
+  function focalFromEvent(e) {
+    const rect = preview.getBoundingClientRect();
+    focal = {
+      x: clamp01((e.clientX - rect.left) / rect.width),
+      y: clamp01((e.clientY - rect.top) / rect.height),
+    };
+    syncMarker();
+    scheduleApply();
+  }
+
+  previewWrap.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    previewWrap.setPointerCapture(e.pointerId);
+    focalFromEvent(e);
+  });
+  previewWrap.addEventListener('pointermove', (e) => {
+    if (dragging) focalFromEvent(e);
+  });
+  previewWrap.addEventListener('pointerup', (e) => {
+    dragging = false;
+    previewWrap.releasePointerCapture(e.pointerId);
+  });
+
+  auto.onchange = () => send({ type: 'auto', enabled: auto.checked });
+
+  // --- Preview image handling ---------------------------------------------
+
+  async function makePreviewUrl(bytes) {
+    const bitmap = await createImageBitmap(new Blob([bytes]));
+    const scale = Math.min(
+      1,
+      PREVIEW_MAX / Math.max(bitmap.width, bitmap.height)
+    );
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise((resolve) =>
+      canvas.toBlob(resolve, 'image/jpeg', 0.8)
+    );
+    return URL.createObjectURL(blob);
+  }
+
+  // Hole diameter matches the mockup: 10% of the image width (120/1200).
+  function sizeMarker() {
+    const d = Math.max(24, preview.getBoundingClientRect().width * 0.1);
+    marker.style.width = d + 'px';
+    marker.style.height = d + 'px';
+  }
+  preview.addEventListener('load', () => {
+    sizeMarker();
+    fitWindow();
+  });
+
+  function showPreview(hash) {
+    const url = previewCache.get(hash);
+    if (!url) return;
+    preview.src = url;
+    previewWrap.style.display = 'block';
+    previewEmpty.style.display = 'none';
+    sizeMarker();
+    fitWindow();
+  }
+
+  function hidePreview(message) {
+    previewWrap.style.display = 'none';
+    previewEmpty.style.display = 'block';
+    previewEmpty.textContent = message;
+    fitWindow();
+  }
+
+  // --- Messages from the plugin -------------------------------------------
+
+  onmessage = async (event) => {
+    const msg = event.data.pluginMessage;
+    if (!msg) return;
+
+    if (msg.type === 'state') {
+      if (!msg.hasImage) {
+        currentHash = null;
+        hidePreview(msg.message);
+        return;
+      }
+      if (typeof msg.autoReapply === 'boolean') auto.checked = msg.autoReapply;
+
+      // While dragging, the marker is the source of truth; state echoes from
+      // our own applies would fight the pointer.
+      if (!dragging) {
+        focal = msg.focal || { x: 0.5, y: 0.5 };
+      }
+      syncMarker();
+
+      if (msg.imageHash !== currentHash) {
+        currentHash = msg.imageHash;
+        if (previewCache.has(currentHash)) {
+          showPreview(currentHash);
+        } else {
+          hidePreview('Loading preview…');
+          send({ type: 'get-image', hash: currentHash });
+        }
+      }
+    } else if (msg.type === 'image') {
+      const url = await makePreviewUrl(msg.bytes);
+      previewCache.set(msg.hash, url);
+      if (msg.hash === currentHash) showPreview(msg.hash);
+    } else if (msg.type === 'perf') {
+      const labels = {
+        resize: 'Re-applied on resize',
+        fills: 'Re-enforced fill',
+        apply: 'Applied',
+      };
+      perf.textContent = `${labels[msg.source] || 'Applied'} in ${msg.ms}ms`;
+    }
+  };
+
+  send({ type: 'refresh' });
+</script>
