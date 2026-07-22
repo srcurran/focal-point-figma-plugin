@@ -55,18 +55,7 @@
     text-align: center;
   }
   .check {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-    margin-top: 10px;
-  }
-  .check label {
-    color: var(--figma-color-text, #333);
-  }
-  #perf {
-    margin-top: 8px;
-    color: var(--figma-color-text-secondary, #888);
-    min-height: 14px;
+    display: none;
   }
 </style>
 
@@ -83,8 +72,6 @@
     <input id="auto" type="checkbox" checked />
     <label for="auto">Re-apply automatically on resize</label>
   </div>
-
-  <div id="perf"></div>
 </div>
 
 <script>
@@ -93,7 +80,6 @@
   const previewEmpty = document.getElementById('previewEmpty');
   const marker = document.getElementById('marker');
   const auto = document.getElementById('auto');
-  const perf = document.getElementById('perf');
 
   const PREVIEW_MAX = 600; // px, longer edge of the downscaled preview
 
@@ -252,13 +238,6 @@
       const url = await makePreviewUrl(msg.bytes);
       previewCache.set(msg.hash, url);
       if (msg.hash === currentHash) showPreview(msg.hash);
-    } else if (msg.type === 'perf') {
-      const labels = {
-        resize: 'Re-applied on resize',
-        fills: 'Re-enforced fill',
-        apply: 'Applied',
-      };
-      perf.textContent = `${labels[msg.source] || 'Applied'} in ${msg.ms}ms`;
     }
   };
 
