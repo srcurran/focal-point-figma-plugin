@@ -138,6 +138,21 @@ async function applyFocal(
   );
 
   const current = found.paint;
+
+  // Persist the focal point before the unchanged-transform bail-out below.
+  // Many focal points collapse to the same transform at a given layer size —
+  // when an axis is fully visible (vw or vh === 1) that axis is ignored, and a
+  // clamped crop pins a whole range of values to the same offset. Skipping the
+  // write in those cases would leave stale pluginData behind, and the resize
+  // handler would later re-apply the *old* point.
+  const stored = readFocal(node);
+  if (!stored || stored.x !== focal.x || stored.y !== focal.y) {
+    node.setPluginData(FOCAL_KEY, JSON.stringify(focal));
+    node.setRelaunchData({
+      edit: `Focal point ${Math.round(focal.x * 100)}%, ${Math.round(focal.y * 100)}%`,
+    });
+  }
+
   if (
     current.scaleMode === 'CROP' &&
     current.imageTransform &&
@@ -160,8 +175,6 @@ async function applyFocal(
   fills[found.index] = newPaint;
   node.fills = fills;
 
-  node.setPluginData(FOCAL_KEY, JSON.stringify(focal));
-  node.setRelaunchData({ edit: `Focal point ${Math.round(focal.x * 100)}%, ${Math.round(focal.y * 100)}%` });
   return { changed: true };
 }
 
